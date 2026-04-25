@@ -65,6 +65,8 @@ def train_cv(
     molecule_featurizers: list[str] | None = None,
     from_foundation: str | None = "CheMeleon",
     accelerator: str = "mps",
+    pytorch_seed: int | None = None,
+    ensemble_size: int = 1,
     extra_tracking_params: dict | None = None,
 ) -> dict[str, dict[str, float]]:
     """Train Chemprop across all CV splits, predict val set, log to MLflow live."""
@@ -84,6 +86,7 @@ def train_cv(
         "molecule_featurizers": str(molecule_featurizers or []),
         "epochs": epochs, "depth": depth, "hidden_dim": hidden_dim,
         "dropout": dropout, "n_splits": len(splits),
+        "ensemble_size": ensemble_size,
         **(extra_tracking_params or {}),
     }
 
@@ -125,6 +128,10 @@ def train_cv(
                 train_cmd += ["--molecule-featurizers", *molecule_featurizers]
             if task_weights:
                 train_cmd += ["--task-weights", *[str(w) for w in task_weights]]
+            if pytorch_seed is not None:
+                train_cmd += ["--pytorch-seed", str(pytorch_seed)]
+            if ensemble_size > 1:
+                train_cmd += ["--ensemble-size", str(ensemble_size)]
 
             print(f"  Training split {i}...", flush=True)
             _run_chemprop(train_cmd)
