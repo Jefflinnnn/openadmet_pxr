@@ -67,6 +67,8 @@ def train_cv(
     accelerator: str = "mps",
     pytorch_seed: int | None = None,
     ensemble_size: int = 1,
+    weight_column: str | None = None,
+    loss_function: str | None = None,
     extra_tracking_params: dict | None = None,
 ) -> dict[str, dict[str, float]]:
     """Train Chemprop across all CV splits, predict val set, log to MLflow live."""
@@ -87,6 +89,8 @@ def train_cv(
         "epochs": epochs, "depth": depth, "hidden_dim": hidden_dim,
         "dropout": dropout, "n_splits": len(splits),
         "ensemble_size": ensemble_size,
+        "weight_column": weight_column or "none",
+        "loss_function": loss_function or "mse",
         **(extra_tracking_params or {}),
     }
 
@@ -132,6 +136,10 @@ def train_cv(
                 train_cmd += ["--pytorch-seed", str(pytorch_seed)]
             if ensemble_size > 1:
                 train_cmd += ["--ensemble-size", str(ensemble_size)]
+            if weight_column:
+                train_cmd += ["--weight-column", weight_column]
+            if loss_function:
+                train_cmd += ["--loss-function", loss_function]
 
             print(f"  Training split {i}...", flush=True)
             _run_chemprop(train_cmd)

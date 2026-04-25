@@ -32,6 +32,8 @@ def main():
     parser.add_argument("--accelerator", type=str, default="mps")
     parser.add_argument("--pytorch-seed", type=int, default=None)
     parser.add_argument("--ensemble-size", type=int, default=1)
+    parser.add_argument("--weight-column", type=str, default=None)
+    parser.add_argument("--loss-function", type=str, default=None)
     parser.add_argument("--run-name", type=str, required=True)
     parser.add_argument("--out-dir", type=str, default=None)
     args = parser.parse_args()
@@ -52,6 +54,8 @@ def main():
         from_foundation=foundation, accelerator=args.accelerator,
         pytorch_seed=args.pytorch_seed,
         ensemble_size=args.ensemble_size,
+        weight_column=args.weight_column,
+        loss_function=args.loss_function,
         extra_tracking_params={"splits_file": Path(args.splits_file).name},
     )
     print_cv_summary(args.run_name, cv_summary)
