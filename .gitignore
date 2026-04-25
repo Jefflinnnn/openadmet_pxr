@@ -8,8 +8,8 @@ dist/
 build/
 mlruns/
 mlruns.db
-data/
-runs/
+/data/
+/runs/
 submissions/
 notebooks/.ipynb_checkpoints/
 *.pt

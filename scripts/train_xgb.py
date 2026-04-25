@@ -41,10 +41,10 @@ def main():
     targets = list(train["pEC50"])
 
     if args.add_chembl_pxr:
-        df = load_chembl_pxr().rename(columns={"chembl_pxr_pchembl": "pEC50"})
+        df = load_chembl_pxr().rename(columns={"chembl_pchembl_value": "pEC50"})
         smiles.extend(df["SMILES"].tolist()); targets.extend(df["pEC50"].tolist())
     if args.add_chembl_cyp3a4:
-        df = load_chembl_cyp3a4().rename(columns={"chembl_cyp3a4_pchembl": "pEC50"})
+        df = load_chembl_cyp3a4().rename(columns={"chembl_pchembl_value": "pEC50"})
         smiles.extend(df["SMILES"].tolist()); targets.extend(df["pEC50"].tolist())
 
     print(f"Dataset: {len(smiles)} molecules")

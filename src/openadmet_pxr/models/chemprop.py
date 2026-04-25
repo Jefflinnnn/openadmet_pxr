@@ -152,10 +152,14 @@ def train_cv(
             _run_chemprop(predict_cmd)
 
             preds_df = pd.read_csv(preds_file)
-            pred_col = next(
-                (c for c in preds_df.columns if "predicted" in c.lower()),
-                preds_df.columns[-1],
-            )
+            # Chemprop names prediction columns by target column name
+            if primary_col in preds_df.columns:
+                pred_col = primary_col
+            else:
+                pred_col = next(
+                    (c for c in preds_df.columns if "predicted" in c.lower()),
+                    preds_df.columns[-1],
+                )
 
             y_true = df.iloc[val_idx][primary_col].values
             y_pred = preds_df[pred_col].values
