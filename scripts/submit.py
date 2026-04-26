@@ -70,14 +70,19 @@ def submit(csv_path: str, model_tag: str) -> bool:
         api_name="/submit_predictions",
     )
 
-    result_lower = str(result).lower()
-    on_cooldown = any(w in result_lower for w in ("cooldown", "wait", "too soon", "limit", "hour"))
+    import re
+    result_str = str(result)
+    result_lower = result_str.lower()
+    on_cooldown = any(w in result_lower for w in ("cooldown", "wait", "too soon", "limit", "please wait"))
 
     print(f"Submitted: {path.name}")
-    print(f"Response:  {result}")
+    print(f"Response:  {result_str}")
 
     if on_cooldown:
-        print("\n⏳ Cooldown active — submission not accepted. Try again later.")
+        # Extract remaining time if present, e.g. "Please wait 02:50:32 before submitting again"
+        match = re.search(r"(\d{2}:\d{2}:\d{2})", result_str)
+        wait_str = f" ({match.group(1)} remaining)" if match else ""
+        print(f"\n⏳ Cooldown active{wait_str} — submission not accepted.")
         return False
 
     print("\nFetching updated leaderboard...")
