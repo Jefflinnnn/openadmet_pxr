@@ -43,7 +43,8 @@ def show_leaderboard(top_n: int = 10, show_ours: bool = True) -> None:
         print(f"\nTotal entries: {len(df)}")
 
 
-def submit(csv_path: str, model_tag: str) -> None:
+def submit(csv_path: str, model_tag: str) -> bool:
+    """Returns True if submission was accepted, False if on cooldown."""
     from gradio_client import Client, handle_file
 
     path = Path(csv_path)
@@ -68,11 +69,20 @@ def submit(csv_path: str, model_tag: str) -> None:
         file_input=handle_file(str(path.resolve())),
         api_name="/submit_predictions",
     )
+
+    result_lower = str(result).lower()
+    on_cooldown = any(w in result_lower for w in ("cooldown", "wait", "too soon", "limit", "hour"))
+
     print(f"Submitted: {path.name}")
     print(f"Response:  {result}")
 
+    if on_cooldown:
+        print("\n⏳ Cooldown active — submission not accepted. Try again later.")
+        return False
+
     print("\nFetching updated leaderboard...")
     show_leaderboard(top_n=10)
+    return True
 
 
 def main():
