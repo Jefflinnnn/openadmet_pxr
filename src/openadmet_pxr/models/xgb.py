@@ -13,6 +13,7 @@ import xgboost as xgb
 from openadmet_pxr.evaluation.metrics import score, aggregate_cv_metrics
 from openadmet_pxr.evaluation.tracking import setup, WANDB_ENTITY, WANDB_PROJECT
 from openadmet_pxr.features.fingerprints import combined_features
+from openadmet_pxr.models.chemprop import ACTIVE_THRESHOLD, _active_metrics
 
 DEFAULT_XGB_PARAMS: dict[str, Any] = {
     "n_estimators": 1000,
@@ -38,12 +39,12 @@ class _WandbCallback(xgb.callback.TrainingCallback):
         self.split_idx = split_idx
 
     def after_iteration(self, model, epoch, evals_log):
-        log = {}
+        log = {f"boosting_round/split_{self.split_idx}": epoch}
         for data, metrics in evals_log.items():
             for metric, values in metrics.items():
                 log[f"split_{self.split_idx}/{data}_{metric}"] = values[-1]
         if wandb.run:
-            wandb.log(log, step=epoch)
+            wandb.log(log)
         return False
 
 
@@ -57,6 +58,7 @@ def train_cv(
     morgan_radius: int = 2,
     morgan_n_bits: int = 2048,
     run_name: str = "xgb_cv",
+    cv_strategy: str = "scaffold",
     extra_tracking_params: dict | None = None,
     out_dir: Path | None = None,
 ) -> tuple[dict[str, dict[str, float]], list[dict]]:
@@ -73,7 +75,7 @@ def train_cv(
         morgan_radius=morgan_radius, morgan_n_bits=morgan_n_bits,
     )
 
-    tracking_params = {
+    config = {
         "model": "xgboost",
         "use_morgan": use_morgan,
         "use_rdkit_2d": use_rdkit_2d,
@@ -83,21 +85,37 @@ def train_cv(
         "n_estimators": params.get("n_estimators"),
         "max_depth": params.get("max_depth"),
         "learning_rate": params.get("learning_rate"),
+        "cv_strategy": cv_strategy,
         **(extra_tracking_params or {}),
     }
+
+    tags = [
+        "model:xgboost",
+        f"cv:{cv_strategy}",
+        f"morgan:{use_morgan}",
+        f"rdkit2d:{use_rdkit_2d}",
+        f"depth:{params.get('max_depth')}",
+    ]
 
     setup()
     split_metrics: list[dict] = []
     split_results: list[dict] = []
+    all_true: list[float] = []
+    all_pred: list[float] = []
     model = None
 
     run = wandb.init(
         entity=WANDB_ENTITY,
         project=WANDB_PROJECT,
         name=run_name,
-        config=tracking_params,
+        config=config,
+        tags=tags,
         reinit=True,
     )
+
+    # Define per-split step axes for clean loss curves
+    for i in range(len(splits)):
+        wandb.define_metric(f"split_{i}/*", step_metric=f"boosting_round/split_{i}")
 
     for i, split in enumerate(splits):
         train_idx = np.array(split["train"])
@@ -124,8 +142,15 @@ def train_cv(
             "val_idx": val_idx.tolist(), "val_preds": val_preds.tolist(), "val_true": y_val.tolist(),
         })
 
-        # Log per-split summary metrics
-        wandb.log({f"split_{i}/{k}": v for k, v in m.items()})
+        all_true.extend(y_val.tolist())
+        all_pred.extend(val_preds.tolist())
+
+        # Per-split summary + active-specific metrics
+        split_log = {f"split_{i}/{k}": v for k, v in m.items()}
+        active_m = _active_metrics(y_val, val_preds, y_train_mean)
+        if active_m:
+            split_log.update({f"split_{i}/{k}": v for k, v in active_m.items()})
+        wandb.log(split_log)
 
         if out_dir:
             pd.DataFrame({
@@ -136,11 +161,25 @@ def train_cv(
         print(f"  Split {i:2d}: MAE={m['mae']:.4f}  RAE={m['rae']:.4f}  "
               f"R2={m['r2']:.4f}  Spearman={m['spearman']:.4f}")
 
-    # Log aggregated CV summary
+    # Aggregated CV summary
     cv_summary = aggregate_cv_metrics(split_metrics)
-    flat = {f"{k}_mean": v["mean"] for k, v in cv_summary.items()}
-    flat.update({f"{k}_std": v["std"] for k, v in cv_summary.items()})
-    wandb.log(flat)
+    summary_log = {}
+    for k, v in cv_summary.items():
+        summary_log[f"cv/{k}_mean"] = v["mean"]
+        summary_log[f"cv/{k}_std"] = v["std"]
+
+    # Pooled active-specific metrics across all val folds
+    all_true_arr = np.array(all_true)
+    all_pred_arr = np.array(all_pred)
+    y_train_mean_global = float(np.nanmean(targets))
+    active_pooled = _active_metrics(all_true_arr, all_pred_arr, y_train_mean_global)
+    if active_pooled:
+        summary_log.update({f"cv/{k}": v for k, v in active_pooled.items()})
+        summary_log["cv/n_actives_in_val"] = int((all_true_arr >= ACTIVE_THRESHOLD).sum())
+
+    wandb.log(summary_log)
+    for k, v in summary_log.items():
+        run.summary[k] = v
 
     if out_dir:
         for f in out_dir.glob("*.csv"):

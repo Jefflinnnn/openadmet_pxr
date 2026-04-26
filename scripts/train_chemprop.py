@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--ensemble-size", type=int, default=1)
     parser.add_argument("--weight-column", type=str, default=None)
     parser.add_argument("--loss-function", type=str, default=None)
+    parser.add_argument("--cv-strategy", type=str, default="scaffold")
     parser.add_argument("--run-name", type=str, required=True)
     parser.add_argument("--out-dir", type=str, default=None)
     args = parser.parse_args()
@@ -56,6 +57,7 @@ def main():
         ensemble_size=args.ensemble_size,
         weight_column=args.weight_column,
         loss_function=args.loss_function,
+        cv_strategy=args.cv_strategy,
         extra_tracking_params={"splits_file": Path(args.splits_file).name},
     )
     print_cv_summary(args.run_name, cv_summary)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 from scipy.stats import kendalltau, spearmanr
-from sklearn.metrics import mean_absolute_error, r2_score
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 
 def rae(y_true: np.ndarray, y_pred: np.ndarray, y_train_mean: float) -> float:
@@ -21,7 +21,7 @@ def score(
     y_pred: np.ndarray,
     y_train_mean: float | None = None,
 ) -> dict[str, float]:
-    """Compute all evaluation metrics (mae, rae, r2, spearman, kendall)."""
+    """Compute all evaluation metrics (mae, rmse, rae, r2, spearman, kendall)."""
     y_true = np.asarray(y_true, dtype=float)
     y_pred = np.asarray(y_pred, dtype=float)
     mask = np.isfinite(y_true) & np.isfinite(y_pred)
@@ -30,6 +30,7 @@ def score(
         y_train_mean = float(np.mean(y_true))
     return {
         "mae": float(mean_absolute_error(y_true, y_pred)),
+        "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
         "rae": rae(y_true, y_pred, y_train_mean),
         "r2": float(r2_score(y_true, y_pred)),
         "spearman": float(spearmanr(y_true, y_pred).statistic),
