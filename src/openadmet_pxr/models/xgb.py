@@ -1,18 +1,17 @@
-"""XGBoost regression wrapper with scaffold CV and live MLflow tracking."""
+"""XGBoost regression wrapper with scaffold CV and live W&B tracking."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
-import mlflow
 import numpy as np
 import pandas as pd
+import wandb
 import xgboost as xgb
 
 from openadmet_pxr.evaluation.metrics import score, aggregate_cv_metrics
-from openadmet_pxr.evaluation.splits import scaffold_cv_splits, save_splits
-from openadmet_pxr.evaluation.tracking import setup
+from openadmet_pxr.evaluation.tracking import setup, WANDB_ENTITY, WANDB_PROJECT
 from openadmet_pxr.features.fingerprints import combined_features
 
 DEFAULT_XGB_PARAMS: dict[str, Any] = {
@@ -33,19 +32,18 @@ DEFAULT_XGB_PARAMS: dict[str, Any] = {
 }
 
 
-class _MLflowCallback(xgb.callback.TrainingCallback):
-    """Log val MAE per boosting round live to the active MLflow run."""
+class _WandbCallback(xgb.callback.TrainingCallback):
+    """Log val MAE per boosting round live to the active W&B run."""
     def __init__(self, split_idx: int):
         self.split_idx = split_idx
 
     def after_iteration(self, model, epoch, evals_log):
+        log = {}
         for data, metrics in evals_log.items():
             for metric, values in metrics.items():
-                mlflow.log_metric(
-                    f"split_{self.split_idx}/{data}_{metric}",
-                    values[-1],
-                    step=epoch,
-                )
+                log[f"split_{self.split_idx}/{data}_{metric}"] = values[-1]
+        if wandb.run:
+            wandb.log(log, step=epoch)
         return False
 
 
@@ -62,7 +60,7 @@ def train_cv(
     extra_tracking_params: dict | None = None,
     out_dir: Path | None = None,
 ) -> tuple[dict[str, dict[str, float]], list[dict]]:
-    """Train XGBoost with CV, logging per-round metrics live to MLflow."""
+    """Train XGBoost with CV, logging per-round metrics live to W&B."""
     params = {**(xgb_params or DEFAULT_XGB_PARAMS)}
     smiles = list(smiles)
     targets = np.array(targets, dtype=float)
@@ -93,71 +91,62 @@ def train_cv(
     split_results: list[dict] = []
     model = None
 
-    with mlflow.start_run(run_name=run_name) as run:
-        mlflow.log_params(tracking_params)
+    run = wandb.init(
+        entity=WANDB_ENTITY,
+        project=WANDB_PROJECT,
+        name=run_name,
+        config=tracking_params,
+        reinit=True,
+    )
 
-        for i, split in enumerate(splits):
-            train_idx = np.array(split["train"])
-            val_idx = np.array(split["val"])
-            X_train, y_train = X[train_idx], targets[train_idx]
-            X_val, y_val = X[val_idx], targets[val_idx]
-            y_train_mean = float(np.mean(y_train))
+    for i, split in enumerate(splits):
+        train_idx = np.array(split["train"])
+        val_idx = np.array(split["val"])
+        X_train, y_train = X[train_idx], targets[train_idx]
+        X_val, y_val = X[val_idx], targets[val_idx]
+        y_train_mean = float(np.mean(y_train))
 
-            model_params = {k: v for k, v in params.items()
-                            if k not in ("early_stopping_rounds", "eval_metric")}
-            model = xgb.XGBRegressor(
-                **model_params,
-                early_stopping_rounds=params.get("early_stopping_rounds", 50),
-                callbacks=[_MLflowCallback(i)],
-            )
-            model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+        model_params = {k: v for k, v in params.items()
+                        if k not in ("early_stopping_rounds", "eval_metric")}
+        model = xgb.XGBRegressor(
+            **model_params,
+            early_stopping_rounds=params.get("early_stopping_rounds", 50),
+            callbacks=[_WandbCallback(i)],
+        )
+        model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
 
-            val_preds = model.predict(X_val)
-            m = score(y_val, val_preds, y_train_mean=y_train_mean)
-            split_metrics.append(m)
-            split_results.append({
-                "split": i, "n_train": len(train_idx), "n_val": len(val_idx),
-                "best_iteration": model.best_iteration, "metrics": m,
-                "val_idx": val_idx.tolist(), "val_preds": val_preds.tolist(), "val_true": y_val.tolist(),
-            })
-
-            if out_dir:
-                pd.DataFrame({
-                    "SMILES": [smiles[j] for j in val_idx],
-                    "pEC50_true": y_val, "pEC50_pred": val_preds,
-                }).to_csv(out_dir / f"split_{i}_preds.csv", index=False)
-
-            print(f"  Split {i:2d}: MAE={m['mae']:.4f}  RAE={m['rae']:.4f}  "
-                  f"R2={m['r2']:.4f}  Spearman={m['spearman']:.4f}")
-
-        # log aggregated CV summary metrics + model
-        cv_summary = aggregate_cv_metrics(split_metrics)
-        flat = {f"{k}_mean": v["mean"] for k, v in cv_summary.items()}
-        flat.update({f"{k}_std": v["std"] for k, v in cv_summary.items()})
-
-        all_val_idx = set(idx for s in split_results for idx in s["val_idx"])
-        train_idx_all = [idx for idx in range(len(smiles)) if idx not in all_val_idx]
-        train_df = pd.DataFrame({
-            "SMILES": [smiles[idx] for idx in train_idx_all],
-            "pEC50": targets[train_idx_all],
+        val_preds = model.predict(X_val)
+        m = score(y_val, val_preds, y_train_mean=y_train_mean)
+        split_metrics.append(m)
+        split_results.append({
+            "split": i, "n_train": len(train_idx), "n_val": len(val_idx),
+            "best_iteration": model.best_iteration, "metrics": m,
+            "val_idx": val_idx.tolist(), "val_preds": val_preds.tolist(), "val_true": y_val.tolist(),
         })
-        train_dataset = mlflow.data.from_pandas(train_df, name="pxr_train", targets="pEC50")
-        mlflow.log_input(train_dataset, context="training")
 
-        if model is not None:
-            model_info = mlflow.sklearn.log_model(
-                sk_model=model, name="xgboost",
-                params={k: str(v) for k, v in tracking_params.items()},
-            )
-            logged_model = mlflow.get_logged_model(model_info.model_id)
-            mlflow.log_metrics(metrics=flat, model_id=logged_model.model_id, dataset=train_dataset)
-        else:
-            mlflow.log_metrics(flat)
+        # Log per-split summary metrics
+        wandb.log({f"split_{i}/{k}": v for k, v in m.items()})
 
         if out_dir:
-            for f in out_dir.glob("*.csv"):
-                mlflow.log_artifact(str(f))
+            pd.DataFrame({
+                "SMILES": [smiles[j] for j in val_idx],
+                "pEC50_true": y_val, "pEC50_pred": val_preds,
+            }).to_csv(out_dir / f"split_{i}_preds.csv", index=False)
 
+        print(f"  Split {i:2d}: MAE={m['mae']:.4f}  RAE={m['rae']:.4f}  "
+              f"R2={m['r2']:.4f}  Spearman={m['spearman']:.4f}")
+
+    # Log aggregated CV summary
+    cv_summary = aggregate_cv_metrics(split_metrics)
+    flat = {f"{k}_mean": v["mean"] for k, v in cv_summary.items()}
+    flat.update({f"{k}_std": v["std"] for k, v in cv_summary.items()})
+    wandb.log(flat)
+
+    if out_dir:
+        for f in out_dir.glob("*.csv"):
+            wandb.save(str(f))
+
+    run.finish()
     return cv_summary, split_results
 
 

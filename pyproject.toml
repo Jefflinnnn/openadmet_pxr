@@ -12,7 +12,7 @@ dependencies = [
     "scipy",
     "scikit-learn",
     "xgboost",
-    "mlflow",
+    "wandb",
     "datasets",
     "huggingface-hub",
     "requests",
