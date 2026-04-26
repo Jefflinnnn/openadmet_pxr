@@ -19,6 +19,7 @@ dependencies = [
     "tqdm",
     "mordredcommunity",
     "mhfp",
+    "gradio_client",
 ]
 
 [project.optional-dependencies]
