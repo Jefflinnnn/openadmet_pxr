@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""CLI: train Chemprop GNN with scaffold CV and MLflow tracking."""
+"""CLI: train Chemprop GNN with scaffold CV and W&B tracking."""
 
 import argparse
 import sys

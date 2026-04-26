@@ -2,26 +2,20 @@
 """Train final model on all training data (no val split) and predict test set."""
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
+
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
-import pandas as pd
-import subprocess
-
+from openadmet_pxr.models.chemprop import run_chemprop
 from openadmet_pxr.submission.validate import make_submission
 
 PROJECT_ROOT = Path(__file__).parents[1]
-CHEMPROP_BIN = str(PROJECT_ROOT / ".venv" / "bin" / "chemprop")
 SUBMISSIONS_DIR = PROJECT_ROOT / "submissions"
-
-
-def _run(args: list[str]) -> None:
-    result = subprocess.run([CHEMPROP_BIN] + args, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(result.stderr[-3000:], file=sys.stderr)
-        raise RuntimeError(f"chemprop exited with code {result.returncode}")
 
 
 def main():
@@ -38,6 +32,7 @@ def main():
     parser.add_argument("--ffn-layers", type=int, default=2)
     parser.add_argument("--ensemble-size", type=int, default=5)
     parser.add_argument("--weight-column", type=str, default=None)
+    parser.add_argument("--loss-function", type=str, default=None)
     parser.add_argument("--no-foundation", action="store_true")
     parser.add_argument("--accelerator", default="mps")
     parser.add_argument("--out-dir", required=True)
@@ -48,13 +43,9 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     SUBMISSIONS_DIR.mkdir(exist_ok=True)
 
-    # Build a single split: all train in train, empty val (chemprop needs a val set)
-    # Use a small held-out fraction just to satisfy chemprop's requirement, then discard
     train_df = pd.read_csv(args.data_path)
     n = len(train_df)
-    # 95% train, 5% val (discarded — only for early stopping signal)
     val_size = max(50, int(0.05 * n))
-    import json, numpy as np
     np.random.seed(42)
     val_idx = np.random.choice(n, val_size, replace=False).tolist()
     train_idx = [i for i in range(n) if i not in set(val_idx)]
@@ -87,11 +78,12 @@ def main():
         train_cmd += ["--from-foundation", "CheMeleon"]
     if args.weight_column:
         train_cmd += ["--weight-column", args.weight_column]
+    if args.loss_function:
+        train_cmd += ["--loss-function", args.loss_function]
 
-    _run(train_cmd)
+    run_chemprop(train_cmd)
     print("Training complete.")
 
-    # Predict test set
     model_paths = list(out_dir.rglob("best.pt"))
     print(f"Found {len(model_paths)} model(s) for prediction.")
     preds_file = out_dir / "test_predictions.csv"
@@ -103,7 +95,7 @@ def main():
         "--output", str(preds_file),
         "--accelerator", args.accelerator,
     ]
-    _run(predict_cmd)
+    run_chemprop(predict_cmd)
 
     preds_df = pd.read_csv(preds_file)
     primary_col = args.target_columns[0]

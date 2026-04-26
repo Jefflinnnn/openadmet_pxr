@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -15,15 +16,23 @@ import wandb
 from openadmet_pxr.evaluation.metrics import score, aggregate_cv_metrics
 from openadmet_pxr.evaluation.tracking import setup, WANDB_ENTITY, WANDB_PROJECT
 
-# pEC50 threshold used by challenge to define actives
 ACTIVE_THRESHOLD = 6.0
 
 PROJECT_ROOT = Path(__file__).parents[3]
-CHEMPROP_BIN = str(PROJECT_ROOT / ".venv" / "bin" / "chemprop")
 
 
-def _run_chemprop(args: list[str]) -> None:
-    cmd = [CHEMPROP_BIN] + args
+def _find_chemprop_bin() -> str:
+    venv_bin = PROJECT_ROOT / ".venv" / "bin" / "chemprop"
+    if venv_bin.exists():
+        return str(venv_bin)
+    found = shutil.which("chemprop")
+    if found:
+        return found
+    raise FileNotFoundError("chemprop binary not found in .venv or PATH")
+
+
+def run_chemprop(args: list[str]) -> None:
+    cmd = [_find_chemprop_bin()] + args
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(result.stderr[-3000:], file=sys.stderr)
@@ -193,7 +202,7 @@ def train_cv(
             train_cmd += ["--loss-function", loss_function]
 
         print(f"  Training split {i}...", flush=True)
-        _run_chemprop(train_cmd)
+        run_chemprop(train_cmd)
 
         _log_epoch_curves(split_out, i)
 
@@ -214,7 +223,7 @@ def train_cv(
         ]
         if molecule_featurizers:
             predict_cmd += ["--molecule-featurizers", *molecule_featurizers]
-        _run_chemprop(predict_cmd)
+        run_chemprop(predict_cmd)
 
         preds_df = pd.read_csv(preds_file)
         pred_col = primary_col if primary_col in preds_df.columns else next(
@@ -295,5 +304,5 @@ def predict(
     ]
     if molecule_featurizers:
         cmd += ["--molecule-featurizers", *molecule_featurizers]
-    _run_chemprop(cmd)
+    run_chemprop(cmd)
     return pd.read_csv(out_csv)

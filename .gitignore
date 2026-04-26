@@ -14,3 +14,4 @@ submissions/
 notebooks/.ipynb_checkpoints/
 *.pt
 *.ckpt
+wandb/
