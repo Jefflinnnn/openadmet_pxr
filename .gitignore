@@ -1,0 +1,35 @@
+# Virtual environment
+.venv/
+
+# Training runs (checkpoints, processed data, logs)
+runs/
+
+# Model weights directory (download separately)
+models/suiren/weights/
+
+# HuggingFace cache
+data/.cache/
+
+# Marimo session state
+notebooks/__marimo__/
+
+# Wandb
+wandb/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
