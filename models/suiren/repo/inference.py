@@ -80,6 +80,13 @@ def parse_args() -> argparse.Namespace:
         help="SMILES string or path to input CSV. If omitted, reads from stdin interactively.",
     )
 
+    parser.add_argument(
+        "--global-feat",
+        type=str,
+        default=None,
+        help="Path to .npy file with pre-computed global features for the input molecules.",
+    )
+
     args = parser.parse_args()
 
     args.task = args.task_flag or args.task_pos
@@ -124,13 +131,20 @@ def normalize_state_dict(checkpoint_obj) -> Tuple[Dict[str, torch.Tensor], Dict[
     return normalized, meta
 
 
-def infer_task_type(state_dict: Dict[str, torch.Tensor], checkpoint_path: Path) -> Tuple[str, int]:
+def infer_task_type(state_dict: Dict[str, torch.Tensor], checkpoint_path: Path, meta: Dict) -> Tuple[str, int]:
     head_key = "proj_2d_glob.2.weight"
     if head_key in state_dict:
         output_dim = int(state_dict[head_key].shape[0])
         if output_dim == 1:
             return "regression", 1
+        if output_dim == 2 and "norm_factor" in meta:
+            return "regression", 1
+        if output_dim == 2 and "regression" in checkpoint_path.name.lower():
+            return "regression", 1
         return "classification", output_dim
+
+    if any(k.startswith("moe_gate.") for k in state_dict):
+        return "regression", 1
 
     checkpoint_name = checkpoint_path.name.lower()
     if "classification" in checkpoint_name:
@@ -193,11 +207,26 @@ def to_float(value) -> float:
 def load_model(checkpoint_path: Path, device: torch.device):
     checkpoint_obj = load_torch_file(checkpoint_path)
     state_dict, meta = normalize_state_dict(checkpoint_obj)
-    task_type, class_num = infer_task_type(state_dict, checkpoint_path)
+    task_type, class_num = infer_task_type(state_dict, checkpoint_path, meta)
 
+    moe_head = any(k.startswith("moe_gate.") for k in state_dict)
+    has_global_feat = any(k.startswith("global_feat_proj.") for k in state_dict)
+    global_feat_dim = 0
+    if has_global_feat:
+        global_feat_dim = int(state_dict["global_feat_proj.0.weight"].shape[1])
+    heteroscedastic = False
+    if "proj_2d_glob.4.weight" in state_dict:
+        heteroscedastic = (state_dict["proj_2d_glob.4.weight"].shape[0] == 2)
+    elif task_type == "regression" and "proj_2d_glob.2.weight" in state_dict:
+        heteroscedastic = (state_dict["proj_2d_glob.2.weight"].shape[0] == 2)
+    attn_pool = any(k.startswith("attn_gate.") for k in state_dict)
     model = standard_finetune(
         class_flag=(task_type == "classification"),
         class_num=class_num if task_type == "classification" else 2,
+        moe_head=moe_head,
+        global_feat_dim=global_feat_dim,
+        heteroscedastic=heteroscedastic,
+        attn_pool=attn_pool,
     )
     model.load_state_dict(state_dict, strict=False)
     model = model.to(device)
@@ -311,7 +340,10 @@ def run_inference(
                 for row_label in labels:
                     outputs.append({"pred_label": int(row_label.item())})
             else:
-                preds = logits.view(-1).detach().cpu()
+                if logits.dim() == 2 and logits.shape[1] == 2:
+                    preds = logits[:, 0].detach().cpu()
+                else:
+                    preds = logits.view(-1).detach().cpu()
                 if norm_factor is not None:
                     mean, std = norm_factor
                     preds = preds * std + mean
@@ -383,6 +415,14 @@ def main() -> None:
         data_list.append(graph)
         valid_indices.append(idx)
 
+    # Attach global features if provided
+    if getattr(args, 'global_feat', None) is not None:
+        import numpy as np
+        global_feats = torch.from_numpy(np.load(args.global_feat)).float()
+        for i, idx in enumerate(valid_indices):
+            if idx < global_feats.shape[0]:
+                data_list[i].global_feat = global_feats[idx].unsqueeze(0)
+
     if data_list:
         predictions = run_inference(
             model=model,
@@ -431,7 +471,7 @@ def main() -> None:
             value_column.append(int(value))
 
     output_df = input_df.copy()
-    output_df["value"] = value_column
+    output_df["pEC50"] = value_column
 
     output_path = Path(args.output).expanduser().resolve() if args.output else input_path
     if output_path is None:

@@ -163,6 +163,40 @@ class PP_smiles_2d(InMemoryDataset):
     def std(self) -> float:
         return float(self.data.y.std())
 
+    def mean_aux(self) -> list:
+        """Per-column means of y_aux, computed over non-NaN values."""
+        storage = self._data
+        if not hasattr(storage, 'y_aux') or storage.y_aux is None:
+            return []
+        y = storage.y_aux  # shape [N*n_aux] (PyG flattens) or [N, n_aux]
+        n = len(storage.y)
+        if y.dim() == 1:
+            n_aux = y.numel() // n
+            y = y.view(n, n_aux)
+        means = []
+        for i in range(y.shape[1]):
+            col = y[:, i]
+            valid = col[~torch.isnan(col)]
+            means.append(float(valid.mean()) if len(valid) > 0 else 0.0)
+        return means
+
+    def std_aux(self) -> list:
+        """Per-column stds of y_aux, computed over non-NaN values."""
+        storage = self._data
+        if not hasattr(storage, 'y_aux') or storage.y_aux is None:
+            return []
+        y = storage.y_aux
+        n = len(storage.y)
+        if y.dim() == 1:
+            n_aux = y.numel() // n
+            y = y.view(n, n_aux)
+        stds = []
+        for i in range(y.shape[1]):
+            col = y[:, i]
+            valid = col[~torch.isnan(col)]
+            stds.append(float(valid.std()) if len(valid) > 1 else 1.0)
+        return stds
+
     def cumpute_avg(self) -> float:
         return len(self.data.x) / len(self.data.y)
 
@@ -287,6 +321,13 @@ class PP_smiles_2d(InMemoryDataset):
                     y = torch.tensor(suppl['value'][i], dtype=torch.float)
                 data = Data(x=node_attr, y=y,
                     edge_index=edge_index, edge_attr=edge_attr, edge_index_all=edge_index_all, smiles=mol)
+                if 'weight' in suppl.columns:
+                    data.sample_weight = torch.tensor(suppl['weight'][i], dtype=torch.float)
+                # Auxiliary regression targets (optional): any columns named aux_0, aux_1, ...
+                aux_cols = [c for c in suppl.columns if c.startswith('aux_')]
+                if aux_cols:
+                    aux_vals = [float(suppl[c][i]) for c in aux_cols]
+                    data.y_aux = torch.tensor(aux_vals, dtype=torch.float)
                 data_list.append(data)
             print(f'The size of {self.split} dataset: {len(data_list)}')
             print(f'Failed to process {fail} molecules:')
